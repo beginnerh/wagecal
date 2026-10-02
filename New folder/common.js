@@ -18,7 +18,6 @@ const pc=x=>Math.round(x*100)+'%';
 const dstr=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
 let auth=null,db=null,defaults={rate:755,nd:true,ndp:10};
 let payout={d1:5,d2:20,lag:0}; // payout days of the month + cutoff days before payday
-let ded={sss:true,phic:true,hdmf:true,when:'split',basis:'actual'}; // government deductions
 try{firebase.initializeApp(firebaseConfig);auth=firebase.auth();db=firebase.database();auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{})}catch(e){console.error(e)}
 
 // Redirect to the landing page unless logged in, then call cb(user, userRef)
@@ -37,7 +36,6 @@ function guard(cb){
       if(v){
         defaults=v;
         if(v.payout&&v.payout.d1&&v.payout.d2)payout={d1:+v.payout.d1,d2:+v.payout.d2,lag:+v.payout.lag||0};
-        if(v.deductions)ded=Object.assign({},ded,v.deductions);
       }
     }).catch(()=>{}).then(()=>cb(u,ref));
   });
@@ -77,7 +75,6 @@ function getPeriod(ds){
 }
 // Wire up the payout-day inputs (#payd1, #payd2, #paylag, #paysave, #paymsg). Saves to users/<uid>/settings/payout.
 function initPayoutUI(ref,onChange){
-  initDedUI(ref,onChange);
   const a=$('payd1'),b=$('payd2'),c=$('paylag');
   if(!a||!b||!c)return;
   a.value=payout.d1;b.value=payout.d2;c.value=payout.lag;
@@ -91,25 +88,6 @@ function initPayoutUI(ref,onChange){
       notify('success','Payout days saved','Your records are now grouped by the '+payLabels().join(' and ')+' payday.');
       if(onChange)onChange();
     }).catch(dbErr);
-  };
-}
-
-// ---------- Employee deductions: SSS, PhilHealth, Pag-IBIG (2026 rates, employee share only) ----------
-// SSS 5% of the monthly salary credit (P5,000-P35,000 in P500 steps); PhilHealth 2.5% of basic pay (P10,000-P100,000 range);
-// Pag-IBIG 2% of up to P10,000 (max P200; 1% if pay is P1,500 or less).
-const sssEE=g=>g>0?r2(Math.min(35000,Math.max(5000,Math.round(g/500)*500))*0.05):0;
-const phicEE=g=>g>0?r2(Math.min(100000,Math.max(10000,g))*0.025):0;
-const hdmfEE=g=>g>0?r2(g<=1500?g*0.01:Math.min(g,10000)*0.02):0;
-function monthDed(g){const x={sss:ded.sss?sssEE(g):0,phic:ded.phic?phicEE(g):0,hdmf:ded.hdmf?hdmfEE(g):0};x.t=r2(x.sss+x.phic+x.hdmf);return x}
-// How much of one contribution comes out of payday slot 0 (earlier payday) or 1 (later payday)
-const dedPart=(x,slot)=>{if(ded.when==='1st')return slot===0?x:0;if(ded.when==='2nd')return slot===1?x:0;const h=r2(x/2);return slot===0?h:r2(x-h)};
-const dedShare=(d,slot)=>r2(dedPart(d.sss,slot)+dedPart(d.phic,slot)+dedPart(d.hdmf,slot));
-function initDedUI(ref,onChange){
-  if(!['cSss','cPhic','cHdmf','cWhen','cBasis','cSave'].every(i=>$(i)))return;
-  $('cSss').checked=ded.sss;$('cPhic').checked=ded.phic;$('cHdmf').checked=ded.hdmf;$('cWhen').value=ded.when;$('cBasis').value=ded.basis;
-  $('cSave').onclick=()=>{
-    ded={sss:$('cSss').checked,phic:$('cPhic').checked,hdmf:$('cHdmf').checked,when:$('cWhen').value,basis:$('cBasis').value};
-    ref.child('settings/deductions').set(ded).then(()=>{notify('success','Deductions saved','Your net salary now reflects these settings.');if(onChange)onChange()}).catch(dbErr);
   };
 }
 
@@ -199,34 +177,16 @@ function paint(entries){
   lb('h1',all?`1st payout (${l1}) · all months`:`1st payout (${l1})`);
   lb('h2',all?`2nd payout (${l2}) · all months`:`2nd payout (${l2})`);
   lb('tot',all?'Total of all entries (gross)':'Monthly total (gross)');
-  // deductions per payout month, then totals for the cards
-  const dm={};
-  Object.keys(months).forEach(k=>{const m=months[k];dm[k]=monthDed(ded.basis==='fixed'?r2((+defaults.rate||0)*26):r2(m.a+m.b))});
-  const sc=all?Object.keys(months):(months[mo]?[mo]:[]),sum={sss:0,phic:0,hdmf:0,t:0};
-  sc.forEach(k=>Object.keys(sum).forEach(x=>sum[x]+=dm[k][x]));
-  const setT=(id,v)=>{const el=$(id);if(el)el.textContent=peso(r2(v))};
-  setT('dsss',sum.sss);setT('dphic',sum.phic);setT('dhdmf',sum.hdmf);setT('dtot',sum.t);setT('net',h1+h2-sum.t);
-  const neg=d=>d?'−'+peso(d):peso(0);
   const bm=$('bymonth');
   if(bm){
-    const ks=Object.keys(months).sort().reverse();let g1=0,g2=0,gn=0,gd=0;
-    const rowsM=slicePage('month',ks.map(k=>{const m=months[k],d=dm[k].t,g=r2(m.a+m.b);g1+=m.a;g2+=m.b;gn+=m.n;gd+=d;const nm=new Date(k+'-01T00:00:00').toLocaleDateString('en-PH',{year:'numeric',month:'long'});return `<tr><td>${nm}</td><td class="n">${m.n}</td><td class="n">${peso(r2(m.a))}</td><td class="n">${peso(r2(m.b))}</td><td class="n">${peso(g)}</td><td class="n">${neg(d)}</td><td class="n"><b>${peso(r2(g-d))}</b></td></tr>`}),bm).join('');
-    bm.innerHTML=`<thead><tr><th>Payout month</th><th class="n">Days logged</th><th class="n">1st payout (${l1})</th><th class="n">2nd payout (${l2})</th><th class="n">Gross</th><th class="n">Deductions</th><th class="n">Net salary</th></tr></thead><tbody>`+(rowsM||'<tr><td colspan="7" style="text-align:center;color:var(--mu)">No entries yet.</td></tr>')+`<tr><td><b>All months</b></td><td class="n">${gn}</td><td class="n"><b>${peso(r2(g1))}</b></td><td class="n"><b>${peso(r2(g2))}</b></td><td class="n"><b>${peso(r2(g1+g2))}</b></td><td class="n"><b>${neg(r2(gd))}</b></td><td class="n"><b>${peso(r2(g1+g2-gd))}</b></td></tr></tbody>`;
+    const ks=Object.keys(months).sort().reverse();let g1=0,g2=0,gn=0;
+    const rowsM=slicePage('month',ks.map(k=>{const m=months[k];g1+=m.a;g2+=m.b;gn+=m.n;const nm=new Date(k+'-01T00:00:00').toLocaleDateString('en-PH',{year:'numeric',month:'long'});return `<tr><td>${nm}</td><td class="n">${m.n}</td><td class="n">${peso(r2(m.a))}</td><td class="n">${peso(r2(m.b))}</td><td class="n"><b>${peso(r2(m.a+m.b))}</b></td></tr>`}),bm).join('');
+    bm.innerHTML=`<thead><tr><th>Payout month</th><th class="n">Days logged</th><th class="n">1st payout (${l1})</th><th class="n">2nd payout (${l2})</th><th class="n">Monthly salary</th></tr></thead><tbody>`+(rowsM||'<tr><td colspan="5" style="text-align:center;color:var(--mu)">No entries yet.</td></tr>')+`<tr><td><b>All months</b></td><td class="n">${gn}</td><td class="n"><b>${peso(r2(g1))}</b></td><td class="n"><b>${peso(r2(g2))}</b></td><td class="n"><b>${peso(r2(g1+g2))}</b></td></tr></tbody>`;
   }
   const bp=$('byperiod');
   if(bp){
     const full={year:'numeric',month:'short',day:'numeric'};
-    const rowsP=slicePage('period',Object.keys(periods).sort().reverse().map(k=>{const q=periods[k],g=r2(q.pay),d=dedShare(dm[q.p.month],q.p.slot);return `<tr><td><b>${q.p.payday.toLocaleDateString('en-PH',full)}</b></td><td>${fd(q.p.start)} – ${fd(q.p.end)}</td><td class="n">${q.n}</td><td class="n">${hm(q.min)}</td><td class="n">${peso(g)}</td><td class="n">${neg(d)}</td><td class="n"><b>${peso(r2(g-d))}</b></td></tr>`}),bp).join('');
-    bp.innerHTML='<thead><tr><th>Payday</th><th>Work period</th><th class="n">Entries</th><th class="n">Hours</th><th class="n">Gross pay</th><th class="n">Deductions</th><th class="n">Net pay</th></tr></thead><tbody>'+(rowsP||'<tr><td colspan="7" style="text-align:center;color:var(--mu)">No entries yet.</td></tr>')+'</tbody>';
+    const rowsP=slicePage('period',Object.keys(periods).sort().reverse().map(k=>{const q=periods[k];return `<tr><td><b>${q.p.payday.toLocaleDateString('en-PH',full)}</b></td><td>${fd(q.p.start)} – ${fd(q.p.end)}</td><td class="n">${q.n}</td><td class="n">${hm(q.min)}</td><td class="n"><b>${peso(r2(q.pay))}</b></td></tr>`}),bp).join('');
+    bp.innerHTML='<thead><tr><th>Payday</th><th>Work period</th><th class="n">Entries</th><th class="n">Hours</th><th class="n">Gross pay</th></tr></thead><tbody>'+(rowsP||'<tr><td colspan="5" style="text-align:center;color:var(--mu)">No entries yet.</td></tr>')+'</tbody>';
   }
 }
-
-// ---------- Calculator-style burger menu (mobile) ----------
-(function(){
-  const b=$('burger'),m=$('menu');if(!b||!m)return;
-  const set=o=>{m.classList.toggle('open',o);b.classList.toggle('open',o);b.setAttribute('aria-expanded',String(o))};
-  b.onclick=e=>{e.stopPropagation();set(!m.classList.contains('open'))};
-  document.addEventListener('click',e=>{if(!m.contains(e.target))set(false)});
-  m.addEventListener('click',e=>{if(e.target.closest('a'))set(false)});
-  addEventListener('keydown',e=>{if(e.key==='Escape')set(false)});
-})();

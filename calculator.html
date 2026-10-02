@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Calculator – PH Salary Calculator</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+<div class="nav"><b>🇵🇭 Salary Calculator</b><a class="on" href="calculator.html">Calculator</a><a href="records.html">Records</a><button class="sec" id="lo" type="button">Log out</button></div>
+
+<div class="card">
+<h2>1. Daily wage rate</h2>
+<div class="row">
+<div><label for="rate">Daily minimum wage (₱)</label><input id="rate" type="number" inputmode="decimal" min="0" step="0.01" value="755"></div>
+<div><button class="sec" id="ncr" type="button">Use NCR ₱755</button></div>
+</div>
+<div class="row" style="margin-top:8px">
+<label class="chk"><input id="nd" type="checkbox" checked>Night differential (10PM–6AM)</label>
+<div><label for="ndp">Night differential rate (%)</label><input id="ndp" type="number" inputmode="decimal" min="0" step="1" value="10"></div>
+</div>
+<p class="note">Use the rate from your wage order (NWPC / DOLE). Hourly rate: <b id="hr">₱0.00</b></p>
+</div>
+
+<div class="card">
+<h2>2. Add a work day</h2>
+<div class="grid">
+<div><label for="date">Date</label><input id="date" type="date"></div>
+<div><label for="tin">Time in</label><input id="tin" type="time" value="08:00"></div>
+<div><label for="tout">Time out</label><input id="tout" type="time" value="17:00"></div>
+<div><label for="brk">Unpaid break (minutes)</label><input id="brk" type="number" inputmode="numeric" min="0" step="5" value="60"></div>
+<div><label for="day">Day type</label><select id="day"><option value="reg">Regular workday</option><option value="rest">Rest day (Sat/Sun)</option></select></div>
+<div><label for="hol">Holiday</label><select id="hol"><option value="none">No holiday</option><option value="reg">Regular holiday (double pay)</option><option value="spe">Special non-working day (+30%)</option></select></div>
+</div>
+<div class="row" style="margin-top:10px"><label class="chk"><input id="abs" type="checkbox">Did not work that day</label></div>
+<div class="prev" id="prev"></div>
+<div class="row" style="margin-top:12px"><button id="add" type="button">Save to my records</button></div>
+<div class="msg" id="msg"></div>
+<p class="note">Sunday is set to Rest day (+30%) automatically. Work beyond 8 hours (after break) is overtime. The break is assumed to be mid-shift. Every save is kept as its own entry, so log one full shift per entry.</p>
+</div>
+<div class="card">
+<h2>3. Payout totals</h2>
+<h2 style="margin:0 0 8px;font-size:.95rem">Payout days</h2>
+<div class="row">
+<div><label for="payd1">1st payout day of the month</label><input id="payd1" type="number" inputmode="numeric" min="1" max="31" value="5"></div>
+<div><label for="payd2">2nd payout day of the month</label><input id="payd2" type="number" inputmode="numeric" min="1" max="31" value="20"></div>
+<div><label for="paylag">Cutoff days before payday</label><input id="paylag" type="number" inputmode="numeric" min="0" max="15" value="0"></div>
+<div><button id="paysave" type="button">Save payout days</button></div>
+</div>
+<div class="msg" id="paymsg"></div>
+<p class="note">Records are grouped by the payday that pays them. Set the days you get paid (for example 5 and 20). If your payroll closes a few days before payday, enter those days as the cutoff. Day 31 uses the last day of shorter months.</p>
+<div class="row" style="margin-top:14px"><div><label for="month">Payout month</label><input id="month" type="month"></div><label class="chk"><input id="all" type="checkbox" checked>Show all saved entries (all months)</label></div>
+<div class="stats" style="margin-top:12px">
+<div class="stat"><small>1st payout (day 1–15)</small><b id="h1">₱0.00</b></div>
+<div class="stat"><small>2nd payout (day 16–end)</small><b id="h2">₱0.00</b></div>
+<div class="stat big"><small>Monthly total (gross)</small><b id="tot">₱0.00</b></div>
+</div>
+<p class="note" style="margin:12px 0 0">Your full tables, and deleting entries, are on the <a href="records.html" style="color:var(--pr)">Records</a> page.</p>
+<div class="msg" id="dbmsg"></div>
+</div>
+</div>
+<script src="https://www.gstatic.com/firebasejs/8.6.8/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.6.8/firebase-auth.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.6.8/firebase-database.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+<script src="common.js"></script>
+<script>
+let ref=null,entries=[];
+$('month').value=dstr(new Date()).slice(0,7);
+$('month').addEventListener('input',()=>paint(entries));
+$('all').addEventListener('input',()=>paint(entries));
+const cur=()=>({date:$('date').value,in:$('tin').value,out:$('tout').value,brk:parseFloat($('brk').value)||0,day:$('day').value,hol:$('hol').value,absent:$('abs').checked,rate:parseFloat($('rate').value)||0,nd:$('nd').checked,ndp:parseFloat($('ndp').value)||0});
+function autoDay(){const v=$('date').value;if(v)$('day').value=new Date(v+'T00:00:00').getDay()===0?'rest':'reg'}
+function preview(){
+  const e=cur();
+  $('hr').textContent=peso(e.rate/8);
+  $('tin').disabled=$('tout').disabled=$('brk').disabled=e.absent;
+  if(!e.absent&&(!e.in||!e.out)){$('prev').innerHTML='<div>Enter time in and time out.</div>';return}
+  const r=calc(e);
+  $('prev').innerHTML=e.absent
+   ?`<div><span>Not worked${e.hol==='reg'?' (regular holiday is paid 100%)':''}</span><span></span></div><div class="t"><span>Pay</span><span>${peso(r.pay)}</span></div>`
+   :`<div><span>Worked (after break)</span><span>${hm(r.w)}</span></div>
+     <div><span>Regular ${hm(r.reg)} × ${pc(r.base)}</span><span>${peso(r.rp)}</span></div>
+     <div><span>Overtime ${hm(r.ot)} × ${pc(r.om)}</span><span>${peso(r.op)}</span></div>
+     <div><span>Night differential ${hm(r.nm)} × ${e.ndp}%</span><span>${peso(r.np)}</span></div>
+     <div class="t"><span>Pay for the day</span><span>${peso(r.pay)}</span></div>`;
+}
+const saveSettings=()=>{if(ref){const e=cur();ref.child('settings').update({rate:e.rate,nd:e.nd,ndp:e.ndp})}};
+$('date').value=dstr(new Date());autoDay();preview();
+['rate','ndp','nd','tin','tout','brk','day','hol','abs'].forEach(i=>$(i).addEventListener('input',preview));
+$('date').addEventListener('change',()=>{autoDay();preview()});
+$('ncr').onclick=()=>{$('rate').value='755';preview()};
+guard((u,r)=>{
+  ref=r;
+  initPayoutUI(r,()=>paint(entries));
+  watch(r,l=>{entries=l;paint(l)});
+  r.child('settings').once('value').then(s=>{const v=s.val();if(v){$('rate').value=v.rate;$('nd').checked=v.nd!==false;$('ndp').value=v.ndp;preview()}});
+  $('add').onclick=()=>{
+    const e=cur();
+    if(e.rate<=0){notify('warning','Missing wage rate','Enter a daily wage rate greater than 0.');return}
+    if(!e.date){notify('warning','Missing date','Choose a date.');return}
+    if(!e.absent&&(!e.in||!e.out)){notify('warning','Missing time','Enter time in and time out.');return}
+    e.pay=calc(e).pay;
+    const key=r.child('entries').push().key;e.id=key;e.savedAt=firebase.database.ServerValue.TIMESTAMP;
+    r.child('entries/'+key).set(e).then(()=>{
+      saveSettings();$('month').value=getPeriod(e.date).month;paint(entries);
+      notify('success','Saved!','Saved '+peso(e.pay)+' for '+e.date+'. View it in Records.');
+      const d=new Date(e.date+'T00:00:00');d.setDate(d.getDate()+1);
+      $('date').value=dstr(d);autoDay();$('hol').value='none';$('abs').checked=false;preview();
+    }).catch(x=>notify('error','Could not save',x.message));
+  };
+});
+</script>
+</body>
+</html>
